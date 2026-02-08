@@ -1,0 +1,118 @@
+/* ==========================================================================
+   Ask Gemini - Floating Bubble Styles
+   ========================================================================== */
+
+/*
+ * The floating "Ask Gemini" bubble that appears when the user selects text
+ * in a Gemini response. Designed to feel native to Google's Material Design
+ * language while remaining unobtrusive.
+ */
+
+#ask-gemini-bubble {
+  position: absolute;
+  z-index: 2147483647; /* Max z-index to ensure it's on top */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: #1a73e8;
+  color: #ffffff;
+  font-family: "Google Sans", Roboto, Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.12),
+    0 4px 12px rgba(0, 0, 0, 0.15);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    background-color 0.1s ease;
+
+  /* Hidden by default */
+  opacity: 0;
+  transform: translateY(4px) scale(0.95);
+  pointer-events: none;
+}
+
+/* Visible state */
+#ask-gemini-bubble.ask-gemini-bubble-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+/* Hover effect */
+#ask-gemini-bubble:hover {
+  background: #1765cc;
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.15),
+    0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+/* Active (click) effect */
+#ask-gemini-bubble:active {
+  background: #1558b0;
+  transform: scale(0.97);
+}
+
+/* Focus outline for accessibility */
+#ask-gemini-bubble:focus-visible {
+  outline: 2px solid #1a73e8;
+  outline-offset: 2px;
+}
+
+/* Icon */
+.ask-gemini-bubble-icon {
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+}
+
+/* Label */
+.ask-gemini-bubble-label {
+  letter-spacing: 0.01em;
+}
+
+/* --------------------------------------------------------------------------
+   Dark mode support
+   Gemini uses a dark theme that we should respect.
+   -------------------------------------------------------------------------- */
+
+@media (prefers-color-scheme: dark) {
+  #ask-gemini-bubble {
+    background: #8ab4f8;
+    color: #202124;
+  }
+
+  #ask-gemini-bubble:hover {
+    background: #aecbfa;
+  }
+
+  #ask-gemini-bubble:active {
+    background: #93b5f0;
+  }
+}
+
+/* Also detect Gemini's dark mode via body/html class if available */
+html[dark] #ask-gemini-bubble,
+body[dark] #ask-gemini-bubble,
+html[data-theme="dark"] #ask-gemini-bubble,
+body[data-theme="dark"] #ask-gemini-bubble,
+.dark-theme #ask-gemini-bubble {
+  background: #8ab4f8;
+  color: #202124;
+}
+
+html[dark] #ask-gemini-bubble:hover,
+body[dark] #ask-gemini-bubble:hover,
+html[data-theme="dark"] #ask-gemini-bubble:hover,
+body[data-theme="dark"] #ask-gemini-bubble:hover,
+.dark-theme #ask-gemini-bubble:hover {
+  background: #aecbfa;
+}

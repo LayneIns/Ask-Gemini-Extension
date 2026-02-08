@@ -1,0 +1,138 @@
+/* ── Ask Gemini Popup ─────────────────────────────────────────── */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Google Sans", "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 14px;
+  color: #202124;
+  background: #fff;
+  min-width: 340px;
+}
+
+.popup-container {
+  padding: 16px 20px 20px;
+}
+
+/* ── Header ────────────────────────────────────────────────────── */
+
+h1 {
+  font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+  color: #1a73e8;
+}
+
+h1 .icon {
+  font-size: 18px;
+}
+
+/* ── Label & hint ──────────────────────────────────────────────── */
+
+label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 4px;
+  color: #3c4043;
+}
+
+.hint {
+  font-size: 12px;
+  color: #5f6368;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.hint code {
+  background: #f1f3f4;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: "Roboto Mono", "Consolas", monospace;
+  font-size: 11px;
+}
+
+/* ── Textarea ──────────────────────────────────────────────────── */
+
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  font-family: "Roboto Mono", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+  resize: vertical;
+  color: #202124;
+  background: #f8f9fa;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: #1a73e8;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.15);
+}
+
+/* ── Buttons ───────────────────────────────────────────────────── */
+
+.button-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.btn {
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+
+.btn-primary {
+  background: #1a73e8;
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: #1557b0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.btn-secondary {
+  background: #f1f3f4;
+  color: #3c4043;
+}
+
+.btn-secondary:hover {
+  background: #e8eaed;
+}
+
+/* ── Status message ────────────────────────────────────────────── */
+
+.status {
+  margin-top: 10px;
+  font-size: 12px;
+  min-height: 18px;
+  text-align: center;
+  transition: opacity 0.3s;
+}
+
+.status.success {
+  color: #0d652d;
+}
+
+.status.error {
+  color: #c5221f;
+}
