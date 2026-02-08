@@ -19,6 +19,12 @@
   // Mutable — will be updated from chrome.storage when available.
   let citationFormat = DEFAULT_CITATION_FORMAT;
 
+  // Quote chip state
+  let quotedText = "";
+  let quotedDisplayText = "";
+  let chipEl = null;
+  let isBypassingSend = false;
+
   // Selectors for Gemini's response containers (tried in order).
   // These identify the area where Gemini's model responses are rendered.
   // If the page DOM changes, update these selectors.
@@ -68,6 +74,14 @@
     '[role="button"]',
     '.toolbar',
     '.action-bar',
+  ];
+
+  // Selectors for the send button
+  const SEND_BUTTON_SELECTORS = [
+    'button[aria-label="Send message"]',
+    'button[aria-label="Send"]',
+    '.send-button',
+    'button[data-test-id="send-button"]',
   ];
 
   // =====================================================================
@@ -203,13 +217,40 @@
 
     try {
       const range = selection.getRangeAt(0);
+
+      // ── Phase 0: Check if the selection is entirely inside a single
+      //    math element in the ORIGINAL DOM.  When the user drags across
+      //    a rendered equation, cloneContents() only copies the inner
+      //    KaTeX spans and loses the parent [data-math] wrapper.  We
+      //    detect this here and grab the LaTeX directly. ──
+      var ancestor = range.commonAncestorContainer;
+      if (ancestor.nodeType === Node.TEXT_NODE) {
+        ancestor = ancestor.parentElement;
+      }
+
+      if (ancestor) {
+        var mathParent = ancestor.closest
+          ? (ancestor.closest("[data-math]") ||
+             ancestor.closest(".math-block") ||
+             ancestor.closest(".math-inline"))
+          : null;
+
+        if (mathParent && mathParent.getAttribute("data-math")) {
+          var latex = mathParent.getAttribute("data-math");
+          var isBlock = mathParent.classList.contains("math-block");
+          log("Selection is inside a data-math element, using LaTeX directly.");
+          return isBlock ? "$$" + latex + "$$" : "$" + latex + "$";
+        }
+      }
+
+      // ── Phase 1: Clone and process the fragment ──
       const fragment = range.cloneContents();
 
       // Quick check: are there any math elements in the selection?
       const hasMath =
         fragment.querySelector(
           ".katex, .katex-display, .MathJax, mjx-container, " +
-          "math, .math-inline, .math-block"
+          "math, .math-inline, .math-block, [data-math]"
         ) !== null;
 
       if (!hasMath) {
@@ -219,15 +260,91 @@
 
       log("Math elements detected in selection, extracting LaTeX.");
 
+      // ── Phase 2: For orphaned KaTeX elements in the fragment (no
+      //    data-math parent), try to find the corresponding math
+      //    element in the ORIGINAL DOM and annotate the fragment. ──
+      annotateMathFromOriginalDOM(fragment, range);
+
       // Replace math elements in the cloned fragment with LaTeX text
       replaceMathElements(fragment);
 
       // Build text from the processed fragment
-      return getTextFromFragment(fragment).trim();
+      var raw = getTextFromFragment(fragment).trim();
+
+      // Collapse excessive blank lines that remain after math replacement
+      raw = raw.replace(/\n{3,}/g, "\n\n");
+
+      return raw;
     } catch (e) {
       warn("Error extracting math from selection:", e);
       return selection.toString().trim();
     }
+  }
+
+  /**
+   * Annotate orphaned KaTeX elements in a cloned fragment by finding
+   * their corresponding [data-math] ancestors in the original DOM.
+   *
+   * When cloneContents() clips a range that starts or ends inside a
+   * math element, the cloned fragment has .katex/.katex-display spans
+   * without the parent [data-math] wrapper.  This function finds those
+   * orphans and wraps them in a span with the data-math attribute so
+   * replaceMathElements() can handle them.
+   */
+  function annotateMathFromOriginalDOM(fragment, range) {
+    // Find katex elements in the fragment that have NO [data-math] ancestor
+    var orphans = fragment.querySelectorAll(
+      ".katex-display, .katex, .katex-html"
+    );
+
+    if (orphans.length === 0) return;
+
+    // Gather all [data-math] elements from the original DOM that
+    // intersect with the selection range.
+    var container = range.commonAncestorContainer;
+    if (container.nodeType === Node.TEXT_NODE) {
+      container = container.parentElement;
+    }
+
+    // Walk up to find a broad-enough ancestor to search
+    var searchRoot = container;
+    for (var i = 0; i < 10 && searchRoot.parentElement; i++) {
+      searchRoot = searchRoot.parentElement;
+      if (searchRoot.classList &&
+          (searchRoot.classList.contains("markdown") ||
+           searchRoot.classList.contains("response-container") ||
+           searchRoot.classList.contains("model-response-text"))) {
+        break;
+      }
+    }
+
+    var mathEls = searchRoot.querySelectorAll("[data-math]");
+    mathEls.forEach(function (mathEl) {
+      // Check if this math element intersects with the selection
+      try {
+        if (range.intersectsNode(mathEl)) {
+          var latex = mathEl.getAttribute("data-math");
+          var isBlock = mathEl.classList.contains("math-block");
+
+          // Find the corresponding orphan in the fragment and wrap it
+          // We'll add a data-math attribute to the first matching orphan
+          orphans.forEach(function (orphan) {
+            if (!orphan.parentNode) return;
+            // Don't re-annotate if already inside a [data-math] wrapper
+            if (orphan.closest && orphan.closest("[data-math]")) return;
+
+            // Wrap in a span with data-math
+            var wrapper = document.createElement(isBlock ? "div" : "span");
+            wrapper.className = isBlock ? "math-block" : "math-inline";
+            wrapper.setAttribute("data-math", latex);
+            orphan.parentNode.insertBefore(wrapper, orphan);
+            wrapper.appendChild(orphan);
+          });
+        }
+      } catch (e) {
+        // intersectsNode may throw in edge cases
+      }
+    });
   }
 
   /**
@@ -238,56 +355,82 @@
    * inline-math elements) must be handled first.
    */
   function replaceMathElements(root) {
+    // ── Gemini-specific: data-math attribute on .math-block / .math-inline ──
+    // These wrappers contain the full LaTeX in a data attribute and must be
+    // processed FIRST because they wrap the KaTeX elements handled below.
+
+    // 0a. Display math blocks (Gemini)
+    root.querySelectorAll(".math-block[data-math]").forEach(function (el) {
+      var latex = el.getAttribute("data-math");
+      if (latex) {
+        el.replaceWith(document.createTextNode("$$" + latex + "$$"));
+      }
+    });
+
+    // 0b. Inline math (Gemini)
+    root.querySelectorAll(".math-inline[data-math]").forEach(function (el) {
+      var latex = el.getAttribute("data-math");
+      if (latex) {
+        el.replaceWith(document.createTextNode("$" + latex + "$"));
+      }
+    });
+
     // 1. KaTeX display math (.katex-display wraps a .katex)
     root.querySelectorAll(".katex-display").forEach(function (el) {
-      const annotation = el.querySelector(
+      // Skip if already handled by a data-math parent
+      if (!el.parentNode) return;
+      var annotation = el.querySelector(
         'annotation[encoding="application/x-tex"]'
       );
-      if (annotation) {
-        el.replaceWith(
-          document.createTextNode("$$" + annotation.textContent + "$$")
-        );
+      var latex = annotation ? annotation.textContent
+        : (el.closest("[data-math]") || {}).getAttribute
+          ? (el.closest("[data-math]") || {}).getAttribute("data-math")
+          : null;
+      if (latex) {
+        el.replaceWith(document.createTextNode("$$" + latex + "$$"));
       }
     });
 
     // 2. KaTeX inline math (remaining .katex not inside .katex-display)
     root.querySelectorAll(".katex").forEach(function (el) {
-      const annotation = el.querySelector(
+      if (!el.parentNode) return;
+      var annotation = el.querySelector(
         'annotation[encoding="application/x-tex"]'
       );
-      if (annotation) {
-        el.replaceWith(
-          document.createTextNode("$" + annotation.textContent + "$")
-        );
+      var latex = annotation ? annotation.textContent
+        : (el.closest("[data-math]") || {}).getAttribute
+          ? (el.closest("[data-math]") || {}).getAttribute("data-math")
+          : null;
+      if (latex) {
+        el.replaceWith(document.createTextNode("$" + latex + "$"));
       }
     });
 
     // 3. MathJax 3.x (<mjx-container>)
     root.querySelectorAll("mjx-container").forEach(function (el) {
-      const isDisplay = el.getAttribute("display") === "block";
-      // MathJax may store TeX in a child <script> or in aria-label
-      const script = el.querySelector('script[type="math/tex"]');
-      let latex = script ? script.textContent : null;
+      var isDisplay = el.getAttribute("display") === "block";
+      var script = el.querySelector('script[type="math/tex"]');
+      var latex = script ? script.textContent : null;
       if (!latex) {
         latex = el.getAttribute("aria-label") || "";
       }
       if (latex) {
-        const wrapped = isDisplay ? "$$" + latex + "$$" : "$" + latex + "$";
+        var wrapped = isDisplay ? "$$" + latex + "$$" : "$" + latex + "$";
         el.replaceWith(document.createTextNode(wrapped));
       }
     });
 
     // 4. MathJax 2.x (.MathJax with a sibling <script type="math/tex">)
     root.querySelectorAll(".MathJax").forEach(function (el) {
-      const nextScript =
+      var nextScript =
         el.nextElementSibling &&
         el.nextElementSibling.tagName === "SCRIPT" &&
         (el.nextElementSibling.type || "").indexOf("math/tex") !== -1
           ? el.nextElementSibling
           : null;
       if (nextScript) {
-        const isDisplay = (nextScript.type || "").indexOf("display") !== -1;
-        const wrapped = isDisplay
+        var isDisplay = (nextScript.type || "").indexOf("display") !== -1;
+        var wrapped = isDisplay
           ? "$$" + nextScript.textContent + "$$"
           : "$" + nextScript.textContent + "$";
         el.replaceWith(document.createTextNode(wrapped));
@@ -297,12 +440,12 @@
 
     // 5. Generic <math> elements (MathML) with a TeX annotation
     root.querySelectorAll("math").forEach(function (el) {
-      const annotation = el.querySelector(
+      var annotation = el.querySelector(
         'annotation[encoding="application/x-tex"]'
       );
       if (annotation) {
-        const isDisplay = el.getAttribute("display") === "block";
-        const wrapped = isDisplay
+        var isDisplay = el.getAttribute("display") === "block";
+        var wrapped = isDisplay
           ? "$$" + annotation.textContent + "$$"
           : "$" + annotation.textContent + "$";
         el.replaceWith(document.createTextNode(wrapped));
@@ -312,9 +455,10 @@
     // 6. Clean up hidden / duplicate math elements that would add
     //    extra text content (e.g., KaTeX's hidden MathML copy)
     root
-      .querySelectorAll(".katex-mathml, .MathJax_Preview")
+      .querySelectorAll(".katex-mathml, .MathJax_Preview, .katex-html")
       .forEach(function (el) {
-        el.remove();
+        // Only remove if still in the tree (not already replaced above)
+        if (el.parentNode) el.remove();
       });
   }
 
@@ -449,57 +593,6 @@
   // =====================================================================
   // Text Injection
   // =====================================================================
-
-  /**
-   * Inject the formatted text into the Gemini input box.
-   *
-   * The text is formatted according to citationFormat (loaded from
-   * chrome.storage or the DEFAULT_CITATION_FORMAT fallback).  The
-   * [SELECTED] placeholder is replaced with the user's selected text.
-   * The cursor is placed on the trailing empty line so the user can
-   * start typing immediately.
-   *
-   * We try multiple strategies to support different input implementations.
-   */
-  function injectTextToInput(text) {
-    const inputEl = findInputElement();
-    if (!inputEl) {
-      warn("Cannot inject text: input element not found.");
-      alert(
-        "Ask Gemini: Could not find the input box. " +
-        "The page structure may have changed. " +
-        "Please copy the text manually."
-      );
-      return false;
-    }
-
-    const formattedText = citationFormat.replace("[SELECTED]", text);
-
-    // Strategy 1: contenteditable element (Quill / ProseMirror / plain)
-    if (
-      inputEl.getAttribute("contenteditable") === "true" ||
-      inputEl.isContentEditable
-    ) {
-      return injectIntoContentEditable(inputEl, formattedText);
-    }
-
-    // Strategy 2: <rich-textarea> custom element
-    // Try to find the inner contenteditable or fall back to properties
-    if (inputEl.tagName && inputEl.tagName.toLowerCase() === "rich-textarea") {
-      return injectIntoRichTextarea(inputEl, formattedText);
-    }
-
-    // Strategy 3: Standard <textarea>
-    if (
-      inputEl.tagName &&
-      inputEl.tagName.toLowerCase() === "textarea"
-    ) {
-      return injectIntoTextarea(inputEl, formattedText);
-    }
-
-    warn("Unknown input element type:", inputEl.tagName);
-    return false;
-  }
 
   /**
    * Inject text into a contenteditable element.
@@ -637,12 +730,119 @@
     el.focus();
   }
 
+  /**
+   * Inject pre-composed text into the Gemini input (no citation formatting).
+   */
+  function injectFormattedText(text) {
+    const inputEl = findInputElement();
+    if (!inputEl) {
+      warn("Cannot inject text: input element not found.");
+      return false;
+    }
+
+    if (
+      inputEl.getAttribute("contenteditable") === "true" ||
+      inputEl.isContentEditable
+    ) {
+      return injectIntoContentEditable(inputEl, text);
+    }
+
+    if (inputEl.tagName && inputEl.tagName.toLowerCase() === "rich-textarea") {
+      return injectIntoRichTextarea(inputEl, text);
+    }
+
+    if (
+      inputEl.tagName &&
+      inputEl.tagName.toLowerCase() === "textarea"
+    ) {
+      return injectIntoTextarea(inputEl, text);
+    }
+
+    warn("Unknown input element type:", inputEl.tagName);
+    return false;
+  }
+
+  /**
+   * Read the current user-typed text from the Gemini input element.
+   */
+  function getUserInput() {
+    const inputEl = findInputElement();
+    if (!inputEl) return "";
+
+    if (
+      inputEl.isContentEditable ||
+      inputEl.getAttribute("contenteditable") === "true"
+    ) {
+      return (inputEl.textContent || "").trim();
+    }
+
+    if (inputEl.tagName && inputEl.tagName.toLowerCase() === "rich-textarea") {
+      const innerSelectors = [
+        ".ql-editor",
+        ".ProseMirror",
+        '[contenteditable="true"]',
+      ];
+      for (let i = 0; i < innerSelectors.length; i++) {
+        const inner = inputEl.querySelector(innerSelectors[i]);
+        if (inner) return (inner.textContent || "").trim();
+      }
+      if (inputEl.shadowRoot) {
+        for (let j = 0; j < innerSelectors.length; j++) {
+          const shadowInner = inputEl.shadowRoot.querySelector(innerSelectors[j]);
+          if (shadowInner) return (shadowInner.textContent || "").trim();
+        }
+      }
+      return (inputEl.value || inputEl.textContent || "").trim();
+    }
+
+    if (inputEl.tagName && inputEl.tagName.toLowerCase() === "textarea") {
+      return (inputEl.value || "").trim();
+    }
+
+    return "";
+  }
+
+  /**
+   * Find the Gemini send button.
+   */
+  function findSendButton() {
+    for (let i = 0; i < SEND_BUTTON_SELECTORS.length; i++) {
+      try {
+        const btn = document.querySelector(SEND_BUTTON_SELECTORS[i]);
+        if (btn) return btn;
+      } catch (e) {
+        // skip
+      }
+    }
+
+    // Heuristic: look for buttons near the input with send-related labels
+    const inputEl = findInputElement();
+    if (inputEl) {
+      const ancestor =
+        inputEl.closest(".input-area-container") ||
+        inputEl.closest(".input-area") ||
+        inputEl.closest("form");
+      if (ancestor) {
+        const buttons = ancestor.querySelectorAll("button");
+        for (let k = 0; k < buttons.length; k++) {
+          const label = (buttons[k].getAttribute("aria-label") || "").toLowerCase();
+          if (label.indexOf("send") !== -1 || label.indexOf("submit") !== -1) {
+            return buttons[k];
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
   // =====================================================================
   // Bubble UI
   // =====================================================================
 
   let bubbleEl = null;
   let currentSelectedText = "";
+  let currentDisplayText = "";
 
   /**
    * Create the floating bubble element (once).
@@ -740,7 +940,7 @@
   }
 
   /**
-   * Handle the bubble click: inject text into the input box.
+   * Handle the bubble click: show quote chip and focus input.
    */
   function handleBubbleClick() {
     log("Bubble clicked. Selected text:", currentSelectedText);
@@ -751,18 +951,258 @@
       return;
     }
 
-    const success = injectTextToInput(currentSelectedText);
+    // Show the quote chip instead of injecting text directly
+    showQuoteChip(currentSelectedText, currentDisplayText);
 
-    if (success) {
-      log("Text successfully injected into input.");
-    } else {
-      warn("Failed to inject text into input.");
+    // Focus the input area so the user can start typing
+    const inputEl = findInputElement();
+    if (inputEl) {
+      inputEl.focus();
+      placeCursorAtEnd(inputEl);
     }
 
     // Clear selection and hide bubble
     window.getSelection().removeAllRanges();
     hideBubble();
     currentSelectedText = "";
+    currentDisplayText = "";
+  }
+
+  // =====================================================================
+  // Quote Chip UI
+  // =====================================================================
+
+  /**
+   * Create the quote chip element (once).
+   */
+  function createQuoteChip() {
+    if (chipEl) return chipEl;
+
+    chipEl = document.createElement("div");
+    chipEl.id = "ask-gemini-quote-chip";
+
+    const quoteIcon = document.createElement("span");
+    quoteIcon.className = "ask-gemini-chip-quote-icon";
+    quoteIcon.textContent = "\u275D"; // ❝
+
+    const textContainer = document.createElement("span");
+    textContainer.className = "ask-gemini-chip-text";
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "ask-gemini-chip-close";
+    closeBtn.innerHTML = "&#10005;"; // ✕
+    closeBtn.setAttribute("aria-label", "Remove quote");
+    closeBtn.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      hideQuoteChip();
+    });
+
+    chipEl.appendChild(quoteIcon);
+    chipEl.appendChild(textContainer);
+    chipEl.appendChild(closeBtn);
+
+    // Prevent mousedown from stealing focus from the input
+    chipEl.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+    });
+
+    document.body.appendChild(chipEl);
+    log("Quote chip element created.");
+    return chipEl;
+  }
+
+  /**
+   * Show the quote chip with the given selected text.
+   * @param {string} text — the raw text (with LaTeX) for the message.
+   * @param {string} [visibleText] — the human-readable display text (without LaTeX markup).
+   */
+  function showQuoteChip(text, visibleText) {
+    quotedText = text;
+    quotedDisplayText = visibleText || text;
+    const chip = createQuoteChip();
+
+    // Use the visual/readable text for the chip display
+    var raw = quotedDisplayText;
+    // Truncate long text for display
+    var preview = raw.length > 120 ? raw.substring(0, 120) + "\u2026" : raw;
+    // Replace newlines with spaces for single-line display
+    preview = preview.replace(/\n/g, " ");
+    chip.querySelector(".ask-gemini-chip-text").textContent = preview;
+
+    // Position and show after a frame so dimensions are available
+    requestAnimationFrame(function () {
+      positionChip();
+      chip.classList.add("ask-gemini-chip-visible");
+    });
+    log("Quote chip shown.");
+  }
+
+  /**
+   * Hide and reset the quote chip.
+   */
+  function hideQuoteChip() {
+    quotedText = "";
+    quotedDisplayText = "";
+    if (chipEl) {
+      chipEl.classList.remove("ask-gemini-chip-visible");
+      log("Quote chip hidden.");
+    }
+  }
+
+  /**
+   * Position the quote chip above the Gemini input area.
+   */
+  function positionChip() {
+    if (!chipEl) return;
+
+    const inputEl = findInputElement();
+    if (!inputEl) return;
+
+    // Walk up to find the visual input box container for positioning.
+    // Use INPUT-AREA-V2 (the rounded visual container) or fall back
+    // to .input-area-container / .text-input-field.
+    const container =
+      inputEl.closest("input-area-v2") ||
+      inputEl.closest(".input-area-container") ||
+      inputEl.closest(".text-input-field") ||
+      inputEl.closest(".input-area") ||
+      inputEl.closest("rich-textarea") ||
+      inputEl;
+
+    const rect = container.getBoundingClientRect();
+    const chipHeight = chipEl.offsetHeight || 36;
+
+    chipEl.style.top = (rect.top - chipHeight - 4) + "px";
+    chipEl.style.left = rect.left + "px";
+    chipEl.style.width = rect.width + "px";
+  }
+
+  // =====================================================================
+  // Send Interception
+  // =====================================================================
+
+  /**
+   * Compose the final message from the quote and user input, inject it,
+   * and trigger Gemini's send action.
+   */
+  function composeAndSend() {
+    if (!quotedText) return;
+
+    // Read what the user typed
+    const userInput = getUserInput();
+
+    // Build the full message: citation template + user's additional input
+    const citation = citationFormat.replace("[SELECTED]", quotedText);
+    const fullMessage = userInput
+      ? citation + "\n" + userInput
+      : citation.trimEnd();
+
+    log(
+      "Composing message. Citation length:", citation.length,
+      "User input:", userInput.substring(0, 50)
+    );
+
+    // Clear the quote chip first
+    hideQuoteChip();
+
+    // Inject the composed message into the input
+    const success = injectFormattedText(fullMessage);
+    if (!success) {
+      warn("Failed to inject composed message.");
+      return;
+    }
+
+    // Re-trigger send after the framework processes the injection
+    isBypassingSend = true;
+    setTimeout(function () {
+      const sendBtn = findSendButton();
+      if (sendBtn) {
+        log("Re-triggering send via button click.");
+        sendBtn.click();
+      } else {
+        // Fallback: dispatch Enter key on the input
+        log("Send button not found, dispatching Enter key.");
+        const inp = findInputElement();
+        if (inp) {
+          inp.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "Enter",
+              code: "Enter",
+              keyCode: 13,
+              which: 13,
+              bubbles: true,
+              cancelable: true,
+            })
+          );
+        }
+      }
+      setTimeout(function () {
+        isBypassingSend = false;
+      }, 300);
+    }, 200);
+  }
+
+  /**
+   * Check if a click event target is (or is inside) a send button.
+   */
+  function isSendButtonClick(target) {
+    if (!target || !(target instanceof Element)) return false;
+
+    for (const selector of SEND_BUTTON_SELECTORS) {
+      try {
+        if (target.matches(selector) || target.closest(selector)) return true;
+      } catch (e) {
+        // skip
+      }
+    }
+
+    // Heuristic: check for button with send-related aria-label
+    const btn =
+      target.tagName === "BUTTON" ? target : target.closest("button");
+    if (btn) {
+      const label = (btn.getAttribute("aria-label") || "").toLowerCase();
+      if (label.indexOf("send") !== -1 || label.indexOf("submit") !== -1) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Capture-phase handler for send-button clicks.
+   */
+  function handleSendClick(e) {
+    if (!quotedText || isBypassingSend) return;
+    if (!isSendButtonClick(e.target)) return;
+
+    log("Intercepting send button click for quote composition.");
+    e.preventDefault();
+    e.stopPropagation();
+    composeAndSend();
+  }
+
+  /**
+   * Capture-phase handler for Enter key (send shortcut).
+   */
+  function handleEnterToSend(e) {
+    if (!quotedText || isBypassingSend) return;
+    if (e.key !== "Enter" || e.shiftKey) return;
+
+    // Only intercept if the input area is focused
+    const inputEl = findInputElement();
+    if (!inputEl) return;
+
+    const active = document.activeElement;
+    if (inputEl !== active && !inputEl.contains(active)) {
+      return;
+    }
+
+    log("Intercepting Enter key for quote composition.");
+    e.preventDefault();
+    e.stopPropagation();
+    composeAndSend();
   }
 
   // =====================================================================
@@ -786,6 +1226,7 @@
       if (!text) {
         hideBubble();
         currentSelectedText = "";
+        currentDisplayText = "";
         return;
       }
 
@@ -794,10 +1235,13 @@
         log("Selection is not in a valid area.");
         hideBubble();
         currentSelectedText = "";
+        currentDisplayText = "";
         return;
       }
 
       currentSelectedText = text;
+      // Also capture the plain visual text (without LaTeX) for chip display
+      currentDisplayText = selection ? selection.toString().trim() : text;
       log("Valid text selected:", text.substring(0, 80) + "...");
 
       // Get the bounding rect of the selection
@@ -825,11 +1269,12 @@
   }
 
   /**
-   * Handle keydown: hide the bubble on Escape key.
+   * Handle keydown: hide the bubble and quote chip on Escape key.
    */
   function handleKeyDown(e) {
     if (e.key === "Escape") {
       hideBubble();
+      hideQuoteChip();
       window.getSelection().removeAllRanges();
       currentSelectedText = "";
     }
@@ -878,9 +1323,18 @@
     document.addEventListener("mousedown", handleMouseDown, true);
     document.addEventListener("keydown", handleKeyDown, true);
 
+    // Send interception (capture phase to fire before Gemini's handlers)
+    document.addEventListener("click", handleSendClick, true);
+    document.addEventListener("keydown", handleEnterToSend, true);
+
     // Hide bubble on scroll (the conversation panel may scroll independently)
     // Use capture phase to catch scroll events on any scrollable container
     document.addEventListener("scroll", handleScroll, true);
+
+    // Reposition quote chip on window resize
+    window.addEventListener("resize", function () {
+      if (quotedText) positionChip();
+    });
 
     log("Ask Gemini extension initialized.");
 
