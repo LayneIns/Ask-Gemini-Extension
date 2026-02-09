@@ -1,8 +1,12 @@
 # Ask Gemini — Chrome Extension
 
-Select any text from a Gemini response, attach it as a **quote chip** above
-the input box, type your follow-up question, and send — the extension
-composes the full cited message for you automatically.
+<!-- Replace the placeholder below with an actual screenshot -->
+![Ask Gemini in action](screenshot.png)
+
+A Chrome extension for [Gemini](https://gemini.google.com) that lets you
+select any text from a response, attach it as a **quote chip** above the
+input box, type your follow-up question, and send — the extension composes
+the full cited message for you automatically.
 
 ## Features
 
@@ -11,10 +15,11 @@ composes the full cited message for you automatically.
 | **Selection Bubble** | A floating "✨ Ask Gemini" button appears when you highlight text in a Gemini response. |
 | **Quote Chip** | Clicking the bubble attaches the selected text as a compact chip above the input box, so you can see what you're referencing while you type. |
 | **Composed Send** | When you press Enter or click Send, the extension intercepts, composes the full message (citation template + your input), injects it, and sends — all in one action. |
-| **Configurable Format** | Click the extension icon in the Chrome toolbar to customise the citation template. Uses `[SELECTED]` as the placeholder. |
+| **Configurable Quote Prompt** | Click the extension icon in the Chrome toolbar to customise the quote prompt template. Uses `[SELECTED]` as the placeholder. |
 | **Math Equations** | LaTeX source is preserved when selecting rendered KaTeX equations. Gemini's `data-math` attributes, KaTeX annotations, and MathJax formats are all supported. Inline math → `$...$`, display math → `$$...$$`. |
 | **Tables** | Selected HTML tables are converted to Markdown table syntax. |
 | **Dark Mode** | Adapts to both light and dark themes (`prefers-color-scheme` and Gemini's own dark-mode classes). |
+| **Auto-Clear on Navigation** | The quote chip is automatically cleared when you switch to a different conversation or start a new chat. |
 | **Accessibility** | Keyboard support (Enter/Space to activate, Escape to dismiss) and proper ARIA roles. |
 | **Debug Mode** | Set `DEBUG = true` in `content.js` for detailed console logging. |
 
@@ -36,11 +41,11 @@ Regarding the following selected content:
 <your follow-up question>
 ```
 
-## Customising the Citation Format
+## Customising the Quote Prompt
 
 1. Click the **Ask Gemini** icon in the Chrome toolbar.
-2. Edit the format string in the popup. Use `[SELECTED]` where the selected
-   text should appear, and `\n` for newlines.
+2. Edit the format string in the **Quote Prompt** field. Use `[SELECTED]`
+   where the selected text should appear, and `\n` for newlines.
 3. Click **Save**. The new format takes effect immediately — no reload needed.
 
 Examples:
@@ -76,7 +81,7 @@ Ask-Gemini-Extension/
 The script is organised into these sections:
 
 1. **Configuration** — DOM selectors for response / input / exclude / send
-   areas, default citation format, debug flag, and quote-chip state.
+   areas, default quote prompt format, debug flag, and quote-chip state.
 2. **Debug Logger** — Conditional `console.log` / `console.warn` helpers.
 3. **DOM Helpers** — Selector matching, selection validation, input element
    lookup, HTML escaping.
@@ -102,16 +107,18 @@ The script is organised into these sections:
    Intercepts both Enter key and send-button clicks in the capture phase.
 9. **Event Handlers** — `mouseup` (selection detection), `mousedown` /
    `scroll` / `keydown` (dismiss bubble), `resize` (reposition chip).
-10. **Settings** — Loads and live-updates the citation format from
+10. **Settings** — Loads and live-updates the quote prompt format from
     `chrome.storage.sync`.
 11. **Initialisation** — Registers listeners once the page is ready.
+    Includes URL-polling and MutationObserver to detect conversation
+    switches and auto-clear the quote chip.
 
 ### Settings Popup (`popup.html` / `popup.js`)
 
 A small panel shown when the user clicks the extension icon. It reads /
-writes `citationFormat` to `chrome.storage.sync`. The content script
-listens for `chrome.storage.onChanged` events and picks up new values
-immediately.
+writes the quote prompt format to `chrome.storage.sync`. The content
+script listens for `chrome.storage.onChanged` events and picks up new
+values immediately.
 
 ## Debugging
 

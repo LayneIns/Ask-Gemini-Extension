@@ -954,18 +954,22 @@
     // Show the quote chip instead of injecting text directly
     showQuoteChip(currentSelectedText, currentDisplayText);
 
-    // Focus the input area so the user can start typing
-    const inputEl = findInputElement();
-    if (inputEl) {
-      inputEl.focus();
-      placeCursorAtEnd(inputEl);
-    }
-
     // Clear selection and hide bubble
     window.getSelection().removeAllRanges();
     hideBubble();
     currentSelectedText = "";
     currentDisplayText = "";
+
+    // Focus the input area AFTER clearing selection and hiding the bubble,
+    // with a short delay so Gemini's framework doesn't steal focus back.
+    setTimeout(function () {
+      const inputEl = findInputElement();
+      if (inputEl) {
+        inputEl.focus();
+        placeCursorAtEnd(inputEl);
+        log("Input focused after bubble click.");
+      }
+    }, 100);
   }
 
   // =====================================================================
