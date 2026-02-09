@@ -1336,6 +1336,80 @@
       if (quotedText) positionChip();
     });
 
+    // ── Clear quote chip when the user switches conversations ──
+    // Gemini is a SPA — navigation may happen via pushState, replaceState,
+    // or internal framework routing.  We use two complementary strategies:
+    //
+    //   1. Poll location.href every 500 ms to catch any URL change.
+    //   2. Observe the main content area with a MutationObserver so we
+    //      catch large-scale DOM swaps (e.g. the conversation container
+    //      being replaced) even if the URL hasn't changed yet.
+
+    var lastUrl = location.href;
+
+    function onConversationChange() {
+      log("Conversation change detected — clearing quote chip.");
+      hideQuoteChip();
+      hideBubble();
+      currentSelectedText = "";
+      currentDisplayText = "";
+    }
+
+    // Strategy 1 — URL polling
+    setInterval(function () {
+      var newUrl = location.href;
+      if (newUrl !== lastUrl) {
+        lastUrl = newUrl;
+        onConversationChange();
+      }
+    }, 500);
+
+    // Also catch browser back/forward
+    window.addEventListener("popstate", function () {
+      // Delay slightly so location.href is updated
+      setTimeout(function () {
+        var newUrl = location.href;
+        if (newUrl !== lastUrl) {
+          lastUrl = newUrl;
+          onConversationChange();
+        }
+      }, 50);
+    });
+
+    // Strategy 2 — MutationObserver on the conversation container
+    // Watch for childList changes on a high-level container that gets
+    // replaced when the user picks a different conversation.
+    var conversationObserver = new MutationObserver(function (mutations) {
+      if (!quotedText) return; // nothing to clear
+
+      for (var i = 0; i < mutations.length; i++) {
+        var m = mutations[i];
+        if (m.removedNodes.length > 0) {
+          // A large subtree was removed — likely a conversation switch
+          for (var j = 0; j < m.removedNodes.length; j++) {
+            var node = m.removedNodes[j];
+            if (node.nodeType === Node.ELEMENT_NODE &&
+                (node.querySelectorAll && node.querySelectorAll(".model-response-text, .message-content, [data-message-author-role]").length > 0)) {
+              onConversationChange();
+              return;
+            }
+          }
+        }
+      }
+    });
+
+    // Start observing once the <main> or app container is available
+    function startConversationObserver() {
+      var target =
+        document.querySelector("main") ||
+        document.querySelector("[role='main']") ||
+        document.querySelector(".app-container") ||
+        document.body;
+      conversationObserver.observe(target, { childList: true, subtree: true });
+      log("Conversation observer started on:", target.tagName || "body");
+    }
+    startConversationObserver();
+
     log("Ask Gemini extension initialized.");
 
     if (DEBUG) {
