@@ -129,7 +129,7 @@ body[data-theme="dark"] #ask-gemini-bubble:hover,
   gap: 8px;
   padding: 8px 14px;
   box-sizing: border-box;
-  border-radius: 20px 20px 4px 4px;
+  border-radius: 20px;
   background: #e8f0fe;
   border: 1px solid #d2e3fc;
   color: #1967d2;
