@@ -1,7 +1,7 @@
 # Ask Gemini — Chrome Extension
 
 <!-- Replace the placeholder below with an actual screenshot -->
-![Ask Gemini in action](screenshot.png)
+![Ask Gemini in action](extension-screenshot.jpg)
 
 A Chrome extension for [Gemini](https://gemini.google.com) that lets you
 select any text from a response, attach it as a **quote chip** above the
